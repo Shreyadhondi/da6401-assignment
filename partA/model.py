@@ -1,6 +1,4 @@
 """
-partA/model.py
-
 Simple configurable CNN for DA6401 Assignment 2 (Part A, Q1).
 
 Architecture:
