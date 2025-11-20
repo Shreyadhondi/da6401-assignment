@@ -1,0 +1,18 @@
+# Ignore dataset folders
+data/
+nature_12K/
+
+# Python cache
+__pycache__/
+*.pyc
+
+# VS Code settings
+.vscode/
+
+# W&B logs
+wandb/
+
+# Virtual environments
+venv/
+env/
+*.env
