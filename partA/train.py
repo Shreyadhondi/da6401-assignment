@@ -5,152 +5,253 @@ import torch.nn as nn
 import torch.optim as optim
 from torch.utils.data import DataLoader
 from torchvision import datasets, transforms
+import wandb
 
-from partA.model import SimpleCNN, CNNConfig
+# ------------------------------------------------------------------
+# Robust import: works for both
+#   - python -m partA.train  (root as package)
+#   - python partA/train.py  (script inside folder)
+# ------------------------------------------------------------------
+try:
+    from partA.model import SimpleCNN, CNNConfig  # when run as module
+except ImportError:
+    from model import SimpleCNN, CNNConfig        # when run as script
 
 
-def load_config():
-    """Loads YAML config file."""
-    config_path = os.path.join("configs", "partA_config.yaml")
-    with open(config_path, "r") as f:
-        cfg = yaml.safe_load(f)
-    return cfg
+# -------------------------------------------------------
+# Load YAML config
+# -------------------------------------------------------
+def load_yaml_config():
+    with open("configs/partA_config.yaml", "r") as f:
+        return yaml.safe_load(f)
 
 
-def build_transforms(cfg, train=True):
-    """Builds transforms using config."""
+# -------------------------------------------------------
+# Data transforms
+# -------------------------------------------------------
+def build_transforms(cfg, train: bool = True, use_augmentations: bool = True):
     img_h, img_w = cfg["model"]["image_size"]
+    tfms = []
 
-    transform_list = []
+    if train and use_augmentations:
+        aug = cfg["data"]["augmentations"]
 
-    if train and cfg["data"]["augmentations"]["horizontal_flip"]:
-        transform_list.append(transforms.RandomHorizontalFlip())
+        if aug.get("horizontal_flip", False):
+            tfms.append(transforms.RandomHorizontalFlip())
 
-    if train and cfg["data"]["augmentations"]["random_rotation_degrees"] > 0:
-        degrees = cfg["data"]["augmentations"]["random_rotation_degrees"]
-        transform_list.append(transforms.RandomRotation(degrees))
+        rot = aug.get("random_rotation_degrees", 0)
+        if rot > 0:
+            tfms.append(transforms.RandomRotation(rot))
 
-    if train:
-        scale_range = cfg["data"]["augmentations"]["random_crop_scale"]
-        transform_list.append(transforms.RandomResizedCrop((img_h, img_w),
-                                                           scale=tuple(scale_range)))
+        scale = aug.get("random_crop_scale", [1.0, 1.0])
+        tfms.append(
+            transforms.RandomResizedCrop((img_h, img_w), scale=tuple(scale))
+        )
     else:
-        transform_list.append(transforms.Resize((img_h, img_w)))
+        tfms.append(transforms.Resize((img_h, img_w)))
 
-    # Normalization
-    transform_list.append(transforms.ToTensor())
-    transform_list.append(transforms.Normalize(mean=cfg["data"]["mean"],
-                                               std=cfg["data"]["std"]))
+    tfms.append(transforms.ToTensor())
+    tfms.append(
+        transforms.Normalize(
+            mean=cfg["data"]["mean"],
+            std=cfg["data"]["std"],
+        )
+    )
 
-    return transforms.Compose(transform_list)
+    return transforms.Compose(tfms)
 
 
-def build_dataloaders(cfg):
-    """Creates train & val dataloaders."""
-    train_dir = cfg["data"]["train_dir"]
-    val_dir = cfg["data"]["val_dir"]
-    batch_size = cfg["training"]["batch_size"]
-    num_workers = cfg["training"]["num_workers"]
+# -------------------------------------------------------
+# Build dataloaders
+# -------------------------------------------------------
+def build_dataloaders(cfg, batch_size, num_workers, use_augmentations: bool = True):
+    train_tfms = build_transforms(cfg, train=True, use_augmentations=use_augmentations)
+    val_tfms = build_transforms(cfg, train=False, use_augmentations=False)
 
-    train_tfms = build_transforms(cfg, train=True)
-    val_tfms = build_transforms(cfg, train=False)
+    train_set = datasets.ImageFolder(cfg["data"]["train_dir"], transform=train_tfms)
+    val_set = datasets.ImageFolder(cfg["data"]["val_dir"], transform=val_tfms)
 
-    train_set = datasets.ImageFolder(train_dir, transform=train_tfms)
-    val_set = datasets.ImageFolder(val_dir, transform=val_tfms)
-
-    train_loader = DataLoader(train_set, batch_size=batch_size,
-                              shuffle=True, num_workers=num_workers)
-
-    val_loader = DataLoader(val_set, batch_size=batch_size,
-                            shuffle=False, num_workers=num_workers)
+    train_loader = DataLoader(
+        train_set,
+        batch_size=batch_size,
+        shuffle=True,
+        num_workers=num_workers,
+        pin_memory=torch.cuda.is_available(),
+    )
+    val_loader = DataLoader(
+        val_set,
+        batch_size=batch_size,
+        shuffle=False,
+        num_workers=num_workers,
+        pin_memory=torch.cuda.is_available(),
+    )
 
     return train_loader, val_loader, len(train_set.classes)
 
 
+# -------------------------------------------------------
+# Train one epoch
+# -------------------------------------------------------
 def train_one_epoch(model, loader, criterion, optimizer, device):
     model.train()
-    running_loss, running_correct = 0.0, 0
+    total_loss = 0.0
+    total_correct = 0
 
-    for imgs, labels in loader:
-        imgs, labels = imgs.to(device), labels.to(device)
+    for x, y in loader:
+        x, y = x.to(device), y.to(device)
 
         optimizer.zero_grad()
-        outputs = model(imgs)
-        loss = criterion(outputs, labels)
+        out = model(x)
+        loss = criterion(out, y)
         loss.backward()
         optimizer.step()
 
-        running_loss += loss.item() * imgs.size(0)
-        _, preds = outputs.max(1)
-        running_correct += (preds == labels).sum().item()
+        total_loss += loss.item() * x.size(0)
+        total_correct += (out.argmax(1) == y).sum().item()
 
-    epoch_loss = running_loss / len(loader.dataset)
-    epoch_acc = running_correct / len(loader.dataset)
-    return epoch_loss, epoch_acc
+    return total_loss / len(loader.dataset), total_correct / len(loader.dataset)
 
 
+# -------------------------------------------------------
+# Validation
+# -------------------------------------------------------
 def evaluate(model, loader, criterion, device):
     model.eval()
-    running_loss, running_correct = 0.0, 0
+    total_loss = 0.0
+    total_correct = 0
 
     with torch.no_grad():
-        for imgs, labels in loader:
-            imgs, labels = imgs.to(device), labels.to(device)
+        for x, y in loader:
+            x, y = x.to(device), y.to(device)
 
-            outputs = model(imgs)
-            loss = criterion(outputs, labels)
+            out = model(x)
+            loss = criterion(out, y)
 
-            running_loss += loss.item() * imgs.size(0)
-            _, preds = outputs.max(1)
-            running_correct += (preds == labels).sum().item()
+            total_loss += loss.item() * x.size(0)
+            total_correct += (out.argmax(1) == y).sum().item()
 
-    epoch_loss = running_loss / len(loader.dataset)
-    epoch_acc = running_correct / len(loader.dataset)
-    return epoch_loss, epoch_acc
+    return total_loss / len(loader.dataset), total_correct / len(loader.dataset)
 
 
+# -------------------------------------------------------
+# Main
+# -------------------------------------------------------
 def main():
-    cfg = load_config()
-    device = torch.device(cfg["training"]["device"])
+    base_cfg = load_yaml_config()
+    model_yaml = base_cfg["model"]
+    train_yaml = base_cfg["training"]
 
+    # ---------------------------------------------
+    # W&B init - sweep overrides happen here
+    # ---------------------------------------------
+    run = wandb.init(
+        project="da6401-assignment-partA",   # match sweep project
+        config={
+            "batch_size": train_yaml["batch_size"],
+            "num_epochs": train_yaml["num_epochs"],
+            "learning_rate": train_yaml["learning_rate"],
+            "weight_decay": train_yaml["weight_decay"],
+            "conv_channels": model_yaml["conv_channels"],
+            "kernel_size": model_yaml["kernel_size"],
+            "activation": model_yaml["activation"],
+            "dense_units": model_yaml["dense_units"],
+            "dropout": model_yaml["dropout"],
+            "optimizer": train_yaml["optimizer"],
+            # default names (these are what *we* use)
+            "batch_norm": False,
+            "augmentations": True,
+        },
+    )
+
+    cfg = wandb.config
+
+    # Also support sweeps that might be using different key names
+    batch_norm = getattr(cfg, "batch_norm", getattr(cfg, "use_batchnorm", False))
+    augmentations = getattr(
+        cfg, "augmentations", getattr(cfg, "use_augmentations", True)
+    )
+
+    # Meaningful dynamic run name
+    run.name = (
+        f"act-{cfg.activation}_"
+        f"conv-{cfg.conv_channels}_"
+        f"opt-{cfg.optimizer}_"
+        f"bn-{batch_norm}_"
+        f"aug-{augmentations}_"
+        f"bs-{cfg.batch_size}"
+    )
+
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print("Using device:", device)
 
-    # Load dataloaders
-    train_loader, val_loader, num_classes = build_dataloaders(cfg)
+    # Load data
+    train_loader, val_loader, num_classes = build_dataloaders(
+        base_cfg,
+        batch_size=cfg.batch_size,
+        num_workers=train_yaml["num_workers"],
+        use_augmentations=augmentations,
+    )
 
-    # Build model config
+    # Build model
     model_cfg = CNNConfig(
         num_classes=num_classes,
         in_channels=3,
-        conv_channels=cfg["model"]["conv_channels"],
-        kernel_size=cfg["model"]["kernel_size"],
-        activation=cfg["model"]["activation"],
-        dense_units=cfg["model"]["dense_units"],
-        dropout=cfg["model"]["dropout"],
-        image_size=cfg["model"]["image_size"]
+        conv_channels=list(cfg.conv_channels),
+        kernel_size=cfg.kernel_size,
+        activation=cfg.activation,
+        dense_units=cfg.dense_units,
+        dropout=cfg.dropout,
+        batch_norm=batch_norm,
+        image_size=tuple(model_yaml["image_size"]),
     )
 
     model = SimpleCNN(model_cfg).to(device)
-    print(f"Model parameters: {model.num_parameters()}")
+    print("Model parameters:", model.num_parameters())
 
-    # Optimizer, Loss
-    lr = cfg["training"]["learning_rate"]
-    weight_decay = cfg["training"]["weight_decay"]
+    wandb.watch(model)
 
-    optimizer = optim.Adam(model.parameters(), lr=lr, weight_decay=weight_decay)
+    # Optimizer
+    if cfg.optimizer == "adam":
+        optimizer = optim.Adam(
+            model.parameters(),
+            lr=cfg.learning_rate,
+            weight_decay=cfg.weight_decay,
+        )
+    else:
+        optimizer = optim.SGD(
+            model.parameters(),
+            lr=cfg.learning_rate,
+            momentum=0.9,
+            weight_decay=cfg.weight_decay,
+        )
+
     criterion = nn.CrossEntropyLoss()
 
-    num_epochs = cfg["training"]["num_epochs"]
+    # Training
+    num_epochs = getattr(cfg, "num_epochs", train_yaml["num_epochs"])
 
-    for epoch in range(num_epochs):
-        print(f"\nEpoch {epoch + 1}/{num_epochs}")
+    for ep in range(num_epochs):
+        print(f"\nEpoch {ep + 1}/{num_epochs}")
 
-        train_loss, train_acc = train_one_epoch(model, train_loader, criterion,
-                                                optimizer, device)
-        val_loss, val_acc = evaluate(model, val_loader, criterion, device)
+        tr_loss, tr_acc = train_one_epoch(
+            model, train_loader, criterion, optimizer, device
+        )
+        va_loss, va_acc = evaluate(model, val_loader, criterion, device)
 
-        print(f"Train Loss: {train_loss:.4f} | Train Acc: {train_acc:.4f}")
-        print(f"Val   Loss: {val_loss:.4f} | Val   Acc: {val_acc:.4f}")
+        print(f"Train Loss: {tr_loss:.4f} | Train Acc: {tr_acc:.4f}")
+        print(f"Val   Loss: {va_loss:.4f} | Val   Acc: {va_acc:.4f}")
+
+        wandb.log(
+            {
+                "epoch": ep + 1,
+                "train_loss": tr_loss,
+                "train_acc": tr_acc,
+                "val_loss": va_loss,
+                "val_acc": va_acc,
+            }
+        )
+
+    run.finish()
 
 
 if __name__ == "__main__":
