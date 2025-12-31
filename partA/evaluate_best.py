@@ -194,7 +194,7 @@ def save_prediction_grid_10x3(
     model: nn.Module,
     dataset: datasets.ImageFolder,
     device: torch.device,
-    out_path: str = "partA/best_model_test_grid.png",
+    out_path: str = "partA/best_model_output.png",
 ) -> None:
     """
     Save a 10x3 grid (30 images) with predicted + true labels.
