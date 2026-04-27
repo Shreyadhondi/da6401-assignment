@@ -145,7 +145,7 @@ def main():
     # W&B init - sweep overrides happen here
     # ---------------------------------------------
     run = wandb.init(
-        project="da6401-assignment-partA",   # match sweep project
+        project="da24m019-assignment2",
         config={
             "batch_size": train_yaml["batch_size"],
             "num_epochs": train_yaml["num_epochs"],

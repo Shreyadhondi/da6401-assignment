@@ -16,3 +16,7 @@ wandb/
 venv/
 env/
 *.env
+
+# Model weights
+*.pth
+*.pt

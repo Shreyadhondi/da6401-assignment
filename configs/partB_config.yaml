@@ -1,0 +1,38 @@
+# configs/partB_config.yaml
+# Config for Part B – Fine-tuning a pretrained ResNet-50 on iNaturalist
+
+model:
+  name: "resnet50"      # For your report only – we use torchvision.models.resnet50
+  num_classes: 10       # Amphibia, Animalia, Arachnida, Aves, Fungi,
+                        # Insecta, Mammalia, Mollusca, Plantae, Reptilia
+  image_size: [224, 224]  # ResNet-50 default image size
+
+training:
+  batch_size: 32
+  num_epochs: 1
+  learning_rate: 0.0001    # smaller LR for fine-tuning
+  weight_decay: 0.0001
+
+  # Fine-tuning strategy:
+  # - "only_fc": freeze everything except final classifier
+  # - "layer4_and_fc": freeze conv1 + layer1–3, train layer4 + fc (our chosen one)
+  # - "full_finetune": train all layers
+  finetune_strategy: "layer4_and_fc"
+
+  num_workers: 4
+  device: "cuda"           # will fall back to CPU in code if CUDA not available
+
+data:
+  train_dir: "data/train"
+  val_dir: "data/val"
+  test_dir: "data/test"
+
+  # Same normalisation as ImageNet / Part-A
+  mean: [0.485, 0.456, 0.406]
+  std:  [0.229, 0.224, 0.225]
+
+  # Light augmentations (same idea as Part-A)
+  augmentations:
+    horizontal_flip: true
+    random_rotation_degrees: 15
+    random_crop_scale: [0.8, 1.0]

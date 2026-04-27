@@ -22,8 +22,10 @@ from torch.utils.data import DataLoader, ConcatDataset
 from torchvision import datasets, transforms
 import matplotlib.pyplot as plt
 
-from partA.model import SimpleCNN, CNNConfig
-
+try:
+    from partA.model import SimpleCNN, CNNConfig
+except ImportError:
+    from model import SimpleCNN, CNNConfig
 
 # -----------------------------#
 # 1. Best config from sweep
