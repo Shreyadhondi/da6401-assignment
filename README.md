@@ -275,7 +275,7 @@ wandb login
   https://wandb.ai/shreyadhondi-indian-institute-of-technology-madras/da24m019-assignment2
 
 * 📝 **W&B Report**:
-  *(https://api.wandb.ai/links/shreyadhondi-indian-institute-of-technology-madras/13ytftex*
+  *https://api.wandb.ai/links/shreyadhondi-indian-institute-of-technology-madras/13ytftex*
 
 ---
 
